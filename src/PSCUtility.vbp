@@ -6,6 +6,7 @@ Class=cExec; cExec.cls
 Module=mdConsole; mdConsole.bas
 Module=mdJson; mdJson.bas
 Class=cZipArchive; cZipArchive.cls
+Module=mdGlobals; mdGlobals.bas
 Startup="Sub Main"
 HelpFile=""
 Title="PSC Utility"
