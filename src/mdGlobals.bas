@@ -6,13 +6,32 @@ Option Explicit
 '=========================================================================
 
 '--- for VariantChangeType
-Private Const VARIANT_ALPHABOOL             As Long = 2
+Private Const VARIANT_ALPHABOOL                         As Long = 2
+'--- for VirtualProtect
+Private Const PAGE_EXECUTE_READWRITE                    As Long = &H40
 
 Private Declare Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As Long)
 Private Declare Function CommandLineToArgvW Lib "shell32" (ByVal lpCmdLine As Long, pNumArgs As Long) As Long
 Private Declare Function VariantChangeType Lib "oleaut32" (Dest As Variant, Src As Variant, ByVal wFlags As Integer, ByVal vt As VbVarType) As Long
 Private Declare Function LocalFree Lib "kernel32" (ByVal hMem As Long) As Long
 Private Declare Function ApiSysAllocString Lib "oleaut32" Alias "SysAllocString" (ByVal Ptr As Long) As Long
+Private Declare Function GetFileAttributes Lib "kernel32" Alias "GetFileAttributesA" (ByVal lpFileName As String) As Long
+Private Declare Function CreateDirectory Lib "kernel32" Alias "CreateDirectoryW" (ByVal lpPathName As Long, ByVal lpSecurityAttributes As Long) As Long
+Private Declare Function QueryPerformanceCounter Lib "kernel32" (lpPerformanceCount As Currency) As Long
+Private Declare Function QueryPerformanceFrequency Lib "kernel32" (lpFrequency As Currency) As Long
+Private Declare Function VirtualProtect Lib "kernel32" (ByVal lpAddress As Long, ByVal dwSize As Long, ByVal flNewProtect As Long, ByRef lpflOldProtect As Long) As Long
+
+'=========================================================================
+' Constants and member variables
+'=========================================================================
+
+'--- formats
+Public Const FORMAT_TIME_ONLY           As String = "hh:nn:ss"
+Public Const FORMAT_DATETIME_LOG        As String = "yyyy.MM.dd hh:nn:ss"
+Public Const FORMAT_BASE_2              As String = "0.00"
+Public Const FORMAT_BASE_3              As String = "0.000"
+Private Const STR_PREFIX_ERROR          As String = "[Error] "
+Private Const STR_PREFIX_WARNING        As String = "[Warning] "
 
 '=========================================================================
 ' Error handling
@@ -171,12 +190,13 @@ Public Function Zn(sText As String, Optional IfEmptyString As Variant = Null) As
     Zn = IIf(LenB(sText) = 0, IfEmptyString, sText)
 End Function
 
-Public Function PathCombine(sPath As String, sFile As String) As String
+Public Function PathCombine(ByVal sPath As String, sFile As String) As String
     PathCombine = sPath & IIf(LenB(sPath) <> 0 And Right$(sPath, 1) <> "\" And LenB(sFile) <> 0, "\", vbNullString) & sFile
 End Function
 
 Public Function GetFileName(ByVal sPath As String) As String
-    GetFileName = Mid$(sPath, InStrRev(sPath, "\") + 1)
+    sPath = Mid$(sPath, InStrRev(sPath, "\") + 1)
+    GetFileName = Mid$(sPath, InStrRev(sPath, "/") + 1)
 End Function
 
 Public Function GetFileExt(ByVal sPath As String) As String
@@ -190,3 +210,180 @@ Public Function GetFileExt2(ByVal sPath As String) As String
         GetFileExt2 = Mid$(sPath, InStr(InStrRev(sPath, "\") + 1, sPath, ".") + 1)
     End If
 End Function
+
+Public Function MkPath(sPath As String) As Boolean
+    Dim lAttrib         As Long
+    
+    lAttrib = GetFileAttributes(sPath)
+    If lAttrib = -1 Then
+        If InStrRev(sPath, "\") > 0 Then
+            If Not MkPath(Left$(sPath, InStrRev(sPath, "\") - 1)) Then
+                Exit Function
+            End If
+        End If
+        If CreateDirectory(StrPtr(sPath), 0) = 0 Then
+            Exit Function
+        End If
+    ElseIf (lAttrib And vbDirectory + vbVolume) = 0 Then
+        Exit Function
+    End If
+    '--- success
+    MkPath = True
+End Function
+
+Public Property Get TimerEx() As Double
+    Dim cFreq           As Currency
+    Dim cValue          As Currency
+    
+    Call QueryPerformanceFrequency(cFreq)
+    Call QueryPerformanceCounter(cValue)
+    TimerEx = cValue / cFreq
+End Property
+
+Public Sub DebugLog(sModule As String, sFunction As String, sText As String, Optional ByVal eType As LogEventTypeConstants = vbLogEventTypeInformation)
+    Dim sPrefix         As String
+    
+    If App.LogMode <> 0 Then
+        App.LogEvent sText, Clamp(eType, 0, vbLogEventTypeInformation)
+    Else
+        sPrefix = Format$(Now, FORMAT_TIME_ONLY) & Right$(Format$(TimerEx, FORMAT_BASE_3), 4) & ": "
+        Select Case eType
+        Case vbLogEventTypeError
+            sPrefix = sPrefix & STR_PREFIX_ERROR
+        Case vbLogEventTypeWarning
+            sPrefix = sPrefix & STR_PREFIX_WARNING
+        End Select
+        sPrefix = sPrefix & IIf(Len(sText) > 200, Left$(sText, 200) & "...", sText) & vbCrLf
+        If eType = vbLogEventTypeError Then
+            ConsoleColorError FOREGROUND_RED, FOREGROUND_MASK, sPrefix
+        Else
+            ConsolePrint sPrefix
+        End If
+    End If
+End Sub
+
+Public Function Clamp( _
+            ByVal lValue As Long, _
+            Optional ByVal lMin As Long = -2147483647, _
+            Optional ByVal lMax As Long = 2147483647) As Long
+    Select Case lValue
+    Case lMin To lMax
+        Clamp = lValue
+    Case Is < lMin
+        Clamp = lMin
+    Case Is > lMax
+        Clamp = lMax
+    End Select
+End Function
+
+Public Function SearchCollection(ByVal oCol As Collection, Index As Variant, Optional RetVal As Variant) As Boolean
+    Dim vItem           As Variant
+    
+    If oCol Is Nothing Then
+        GoTo QH
+    ElseIf pvCallCollectionItem(oCol, Index, vItem) < 0 Then
+        GoTo QH
+    End If
+    If IsObject(vItem) Then
+        Set RetVal = vItem
+    Else
+        RetVal = vItem
+    End If
+    '--- success
+    SearchCollection = True
+QH:
+End Function
+
+Private Function pvCallCollectionItem(ByVal oCol As Collection, Index As Variant, Optional RetVal As Variant) As Long
+    Const IDX_COLLECTION_ITEM As Long = 7
+    
+    pvPatchMethodTrampoline AddressOf mdGlobals.pvCallCollectionItem, IDX_COLLECTION_ITEM
+    pvCallCollectionItem = pvCallCollectionItem(oCol, Index, RetVal)
+End Function
+
+Private Function pvPatchMethodTrampoline(ByVal Pfn As Long, ByVal lMethodIdx As Long) As Boolean
+    Dim bInIDE          As Boolean
+
+    Debug.Assert pvSetTrue(bInIDE)
+    If bInIDE Then
+        '--- note: IDE is not large-address aware
+        Call CopyMemory(Pfn, ByVal Pfn + &H16, 4)
+    Else
+        Call VirtualProtect(Pfn, 12, PAGE_EXECUTE_READWRITE, 0)
+    End If
+    ' 0: 8B 44 24 04          mov         eax,dword ptr [esp+4]
+    ' 4: 8B 00                mov         eax,dword ptr [eax]
+    ' 6: FF A0 00 00 00 00    jmp         dword ptr [eax+lMethodIdx*4]
+    Call CopyMemory(ByVal Pfn, -684575231150992.4725@, 8)
+    Call CopyMemory(ByVal (Pfn Xor &H80000000) + 8 Xor &H80000000, lMethodIdx * 4, 4)
+    '--- success
+    pvPatchMethodTrampoline = True
+End Function
+
+Public Function preg_replace(find_re As String, sText As String, Optional sReplace As String) As String
+    preg_replace = pvInitRegExp(find_re).Replace(sText, sReplace)
+End Function
+
+Private Function pvInitRegExp(sPattern As String) As Object
+    Dim lIdx            As Long
+
+    Set pvInitRegExp = CreateObject("VBScript.RegExp")
+    With pvInitRegExp
+        .Global = True
+        If Left$(sPattern, 1) = "/" Then
+            lIdx = InStrRev(sPattern, "/")
+            .Pattern = Mid$(sPattern, 2, lIdx - 2)
+            .IgnoreCase = (InStr(lIdx, sPattern, "i") > 0)
+            .MultiLine = (InStr(lIdx, sPattern, "m") > 0)
+        Else
+            .Pattern = sPattern
+        End If
+    End With
+End Function
+
+' based on https://blogs.msdn.microsoft.com/twistylittlepassagesallalike/2011/04/23/everyone-quotes-command-line-arguments-the-wrong-way
+Public Function ArgvQuote(ByVal sArg As String, Optional ByVal Force As Boolean) As String
+    Const WHITESPACE As String = "*[ " & vbTab & vbVerticalTab & vbCrLf & "]*"
+    
+    If Not Force And LenB(sArg) <> 0 And Not sArg Like WHITESPACE Then
+        ArgvQuote = sArg
+    Else
+        With pvInitRegExp("(\\+)($|"")|(\\+)")
+            ArgvQuote = """" & Replace(.Replace(sArg, "$1$1$2$3"), """", "\""") & """"
+        End With
+    End If
+End Function
+
+Public Function ReadTextFile(sFile As String) As String
+    Dim sCharset            As String
+
+    sCharset = "utf-8"
+    With CreateObject("ADODB.Stream")
+        .Open
+        If LenB(sCharset) <> 0 Then
+            .Charset = sCharset
+        End If
+        .LoadFromFile sFile
+        ReadTextFile = .ReadText()
+    End With
+End Function
+
+Public Sub WriteTextFile(sFile As String, sText As String, Optional sCharset As String)
+    With CreateObject("ADODB.Stream")
+        .Open
+        If LenB(sCharset) <> 0 Then
+            .Charset = sCharset
+        End If
+        .WriteText sText
+        .SaveToFile sFile, adSaveCreateOverWrite
+    End With
+End Sub
+
+Public Function FileExists(sFile As String) As Boolean
+    If GetFileAttributes(sFile) = -1 Then ' INVALID_FILE_ATTRIBUTES
+        FileExists = (Err.LastDllError = 32) ' ERROR_SHARING_VIOLATION
+    Else
+        FileExists = True
+    End If
+End Function
+

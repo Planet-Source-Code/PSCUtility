@@ -12,7 +12,7 @@ HelpFile=""
 Title="PSC Utility"
 ExeName32="PSCUtility.exe"
 Path32=".."
-Command32="-l \\UCSNAS\Data\office.unicontsoft.com\FTP\pscode\AllThePscZipFiles\"
+Command32=""
 Name="PSCUtility"
 HelpContextID="0"
 CompatibleMode="0"
@@ -25,6 +25,7 @@ VersionCompanyName="Unicontsoft"
 VersionFileDescription="PSC Utility"
 VersionLegalCopyright="Copyright © 2020 by wqweto@gmail.com"
 VersionProductName="PSC Utility"
+CondComp="USE_DEBUG_LOG = 1"
 CompilationType=0
 OptimizationType=0
 FavorPentiumPro(tm)=0
