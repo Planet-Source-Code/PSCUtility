@@ -219,7 +219,7 @@ Private Function pvUpload(sDbFile As String, sPassword As String, sUploadsFolder
         sRepoName = LCase$(pvAppend(pvCleanup(C_Str(rs!AuthorName.Value)), "-", pvCleanup(C_Str(rs!Title.Value)))) & "__" & rs!WorldID.Value & "-" & rs!ID.Value
         DebugLog MODULE_NAME, FUNC_NAME, Replace("Uploading %1", "%1", sRepoName)
         If LenB(C_Str(rs!ZipFilePath.Value)) <> 0 Then
-            sZipFile = GetFileName(C_Str(rs!ZipFilePath.Value))
+            sZipFile = Trim$(GetFileName(C_Str(rs!ZipFilePath.Value)))
             If Not FileExists(PathCombine(sUploadsFolder, sZipFile)) Then
                 DebugLog MODULE_NAME, FUNC_NAME, Replace("Upload %1 not found", "%1", sZipFile), vbLogEventTypeError
                 GoTo Continue
@@ -231,10 +231,9 @@ Private Function pvUpload(sDbFile As String, sPassword As String, sUploadsFolder
             End If
         Else
             Set oArchive = Nothing
-            GoTo Continue
         End If
         If LenB(C_Str(rs!PicturePath.Value)) <> 0 Then
-            sPictureFile = GetFileName(C_Str(rs!PicturePath.Value))
+            sPictureFile = Trim$(GetFileName(C_Str(rs!PicturePath.Value)))
             If Not FileExists(PathCombine(sPictureFolder, sPictureFile)) Then
                 DebugLog MODULE_NAME, FUNC_NAME, Replace("Picture %1 not found", "%1", sPictureFile), vbLogEventTypeError
                 GoTo Continue
@@ -265,24 +264,30 @@ Private Function pvUpload(sDbFile As String, sPassword As String, sUploadsFolder
             sReadmeText = Replace(sReadmeText, "{Title}", rs!Title.Value)
             sReadmeText = Replace(sReadmeText, "{AuthorName}", Zn(C_Str(rs!AuthorName.Value), "Unknown Author"))
             sReadmeText = Replace(sReadmeText, "{PICTURE_IMAGE}", IIf(LenB(sPictureFile) <> 0, "<img src=""" & sPictureFile & """>", vbNullString))
-            sReadmeText = Replace(sReadmeText, "{Description}", pvToMarkdown(C_Str(rs!Description.Value)))
-            sReadmeText = preg_replace("\s+$", sReadmeText, vbNullString) & vbCrLf
-            sText = pvToMarkdown(pvEmptyIf(rs!Inputs.Value, "None"))
-            sText = pvAppend(sText, vbCrLf & vbCrLf, pvToMarkdown(pvEmptyIf(rs!Assumes.Value, "None")))
-            sText = pvAppend(sText, vbCrLf & vbCrLf, pvToMarkdown(pvEmptyIf(rs!CodeReturns.Value, "None")))
-            sText = pvAppend(sText, vbCrLf & vbCrLf, pvToMarkdown(pvEmptyIf(rs!SideEffects.Value, "None")))
+            sReadmeText = Replace(sReadmeText, "{Description}", pvToMarkdown(pvRTrim(C_Str(rs!Description.Value))))
+            sReadmeText = pvRTrim(sReadmeText) & vbCrLf
+            sText = pvToMarkdown(pvRTrim(pvEmptyIf(rs!Inputs.Value, "None")))
+            sText = pvAppend(sText, vbCrLf & vbCrLf, pvToMarkdown(pvRTrim(pvEmptyIf(rs!Assumes.Value, "None"))))
+            sText = pvAppend(sText, vbCrLf & vbCrLf, pvToMarkdown(pvRTrim(pvEmptyIf(rs!CodeReturns.Value, "None"))))
+            sText = pvAppend(sText, vbCrLf & vbCrLf, pvToMarkdown(pvRTrim(pvEmptyIf(rs!SideEffects.Value, "None"))))
             sReadmeText = Replace(sReadmeText, "{EXTRA_TITLE}", IIf(LenB(sText) <> 0, "### More Info", vbNullString))
             sReadmeText = Replace(sReadmeText, "{EXTRA_TEXT}", IIf(LenB(sText) <> 0, sText & vbCrLf, vbNullString))
-            sReadmeText = preg_replace("\s+$", sReadmeText, vbNullString) & vbCrLf
-            sText = pvEmptyIf(rs!ApiDeclarations.Value, "None")
+            sReadmeText = pvRTrim(sReadmeText) & vbCrLf
+            sText = pvRTrim(pvEmptyIf(rs!ApiDeclarations.Value, "None"))
             sReadmeText = Replace(sReadmeText, "{API_TITLE}", IIf(LenB(sText) <> 0, "### API Declarations", vbNullString))
-            sReadmeText = Replace(sReadmeText, "{API_TEXT}", IIf(LenB(sText) <> 0, "```" & vbCrLf & sText & vbCrLf & "```" & vbCrLf, vbNullString))
-            sReadmeText = preg_replace("\s+$", sReadmeText, vbNullString) & vbCrLf
-            sText = pvEmptyIf(C_Str(rs!code.Value), "Upload")
+            If LenB(sText) <> 0 And preg_match("Declare \w+ \w+ Lib", sText) > 0 Then
+                sText = "```" & vbCrLf & sText & vbCrLf & "```"
+            End If
+            sReadmeText = Replace(sReadmeText, "{API_TEXT}", IIf(LenB(sText) <> 0, sText & vbCrLf, vbNullString))
+            sReadmeText = pvRTrim(sReadmeText) & vbCrLf
+            sText = pvRTrim(pvEmptyIf(C_Str(rs!code.Value), "Upload"))
             sReadmeText = Replace(sReadmeText, "{CODE_TITLE}", IIf(LenB(sText) <> 0, "### Source Code", vbNullString))
-            sReadmeText = Replace(sReadmeText, "{CODE_TEXT}", IIf(LenB(sText) <> 0, "```" & vbCrLf & sText & vbCrLf & "```" & vbCrLf, vbNullString))
-            sReadmeText = preg_replace("\s+$", sReadmeText, vbNullString) & vbCrLf
-            WriteTextFile PathCombine(vElem, "README.md"), sReadmeText
+            If LenB(sText) <> 0 And preg_match("<\w+>", sText) <= 2 Then
+                sText = "```" & vbCrLf & sText & vbCrLf & "```"
+            End If
+            sReadmeText = Replace(sReadmeText, "{CODE_TEXT}", IIf(LenB(sText) <> 0, sText & vbCrLf, vbNullString))
+            sReadmeText = pvRTrim(sReadmeText) & vbCrLf
+            WriteTextFile PathCombine(vElem, "README.md"), sReadmeText, "utf-8"
             ChDir vElem
             pvExec "git", "init"
             pvExec "git", "config user.email pscbot@saas.bg"
@@ -326,15 +331,24 @@ Private Function pvEmptyIf(Value As Variant, EmptyValue As Variant) As Variant
 End Function
 
 Private Function pvExec(sFile As String, sParams As String) As String
+    Const FUNC_NAME     As String = "pvExec"
+    Dim vElem           As Variant
+    
     With New cExec
         .Run sFile, sParams, StartHidden:=True, LimitFlags:=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
         pvExec = .ReadAllOutput & .ReadAllError
         If C_Bool(m_oOpt.Item("-v")) Then
-            ConsolePrint pvExec
+            For Each vElem In Split(pvExec, vbLf)
+                DebugLog MODULE_NAME, FUNC_NAME, Replace(Replace(vElem, vbCr, vbNullString), vbNullChar, vbNullString)
+            Next
         End If
     End With
 End Function
 
 Private Function pvToMarkdown(sText As String) As String
     pvToMarkdown = preg_replace("\r?\n", sText, vbCrLf & vbCrLf)
+End Function
+
+Private Function pvRTrim(sText As String) As String
+    pvRTrim = preg_replace("\s+$", sText, vbNullString)
 End Function

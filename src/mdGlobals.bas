@@ -243,7 +243,7 @@ End Property
 Public Sub DebugLog(sModule As String, sFunction As String, sText As String, Optional ByVal eType As LogEventTypeConstants = vbLogEventTypeInformation)
     Dim sPrefix         As String
     
-    If App.LogMode <> 0 Then
+    If App.LogMode = vbLogToNT Then
         App.LogEvent sText, Clamp(eType, 0, vbLogEventTypeInformation)
     Else
         sPrefix = Format$(Now, FORMAT_TIME_ONLY) & Right$(Format$(TimerEx, FORMAT_BASE_3), 4) & ": "
@@ -322,6 +322,39 @@ End Function
 
 Public Function preg_replace(find_re As String, sText As String, Optional sReplace As String) As String
     preg_replace = pvInitRegExp(find_re).Replace(sText, sReplace)
+End Function
+
+Public Function preg_match(find_re As String, sText As String, Optional Matches As Variant, Optional Indexes As Variant) As Long
+    Dim lIdx            As Long
+    
+    With pvInitRegExp(find_re).Execute(sText)
+        preg_match = .Count
+        If Not IsMissing(Matches) Then
+            If .Count = 0 Then
+                Matches = Split(vbNullString)
+            ElseIf .Count = 1 Then
+                ReDim Matches(0 To 0) As String
+                Matches(0) = .Item(0).Value
+            Else
+                ReDim Matches(0 To .Count - 1) As String
+                For lIdx = 0 To .Count - 1
+                    Matches(lIdx) = .Item(lIdx).Value
+                Next
+            End If
+        End If
+        If Not IsMissing(Indexes) Then
+            If .Count = 0 Then
+                Indexes = Array()
+            ElseIf .Count = 1 Then
+                Indexes = Array(.Item(0).FirstIndex + 1)
+            Else
+                ReDim Indexes(0 To .Count - 1) As Variant
+                For lIdx = 0 To .Count - 1
+                    Indexes(lIdx) = .Item(lIdx).FirstIndex + 1
+                Next
+            End If
+        End If
+    End With
 End Function
 
 Private Function pvInitRegExp(sPattern As String) As Object
