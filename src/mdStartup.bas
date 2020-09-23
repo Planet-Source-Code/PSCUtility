@@ -1,4 +1,5 @@
 Attribute VB_Name = "mdStartup"
+' Make sure all variables are declared
 Option Explicit
 Private Const MODULE_NAME As String = "mdStartup"
 
@@ -108,7 +109,7 @@ Private Function pvListArchives(sPath As String) As Boolean
         Set oArchive = New cZipArchive
         If oArchive.OpenArchive(vElem) Then
             For lIdx = 0 To oArchive.FileCount - 1
-                sName = oArchive.FileInfo(lIdx)(0)
+                sName = At(oArchive.FileInfo(lIdx), 0)
                 If Left$(sName, Len(STR_PSC_README)) <> STR_PSC_README And Right$(sName, 1) <> "\" Then
                     ConsolePrint GetFileName(vElem) & "#" & sName & vbCrLf
                     sExt = GetFileExt(sName)
@@ -145,6 +146,7 @@ End Function
 Private Function pvUpload(sDbFile As String, sPassword As String, sUploadsFolder As String, sPictureFolder As String) As Boolean
     Const FUNC_NAME     As String = "pvUpload"
     Const MAX_REPONAME  As Long = 100
+    Const STR_EMPTYLIST As String = "none|none.|non|non.|no|no.|nothing|nothing.|n/a|n/a.|na|na.|nil|nil."
     Dim cn              As Connection
     Dim rs              As Recordset
     Dim sSQL            As String
@@ -160,6 +162,7 @@ Private Function pvUpload(sDbFile As String, sPassword As String, sUploadsFolder
     Dim sZipFile        As String
     Dim sText           As String
     Dim sResult         As String
+    Dim lIdx            As Long
     
     On Error GoTo EH
     Set cn = New ADODB.Connection
@@ -221,7 +224,7 @@ Private Function pvUpload(sDbFile As String, sPassword As String, sUploadsFolder
         sRepoName = LCase$(Left$(pvAppend(pvCleanup(C_Str(rs!AuthorName.Value)), "-", pvCleanup(C_Str(rs!Title.Value))), MAX_REPONAME - 10)) & "__" & rs!WorldID.Value & "-" & rs!ID.Value
         DebugLog MODULE_NAME, FUNC_NAME, Replace(Replace(Replace("Uploading %1 [%2/%3]", "%1", sRepoName), "%2", rs.AbsolutePosition), "%3", rs.RecordCount)
         If LenB(Trim$(C_Str(rs!ZipFilePath.Value))) <> 0 Then
-            sZipFile = Trim$(GetFileName(C_Str(rs!ZipFilePath.Value)))
+            sZipFile = StrConv(StrConv(Trim$(GetFileName(C_Str(rs!ZipFilePath.Value))), vbFromUnicode), vbUnicode)
             If Not FileExists(PathCombine(sUploadsFolder, sZipFile)) Then
                 DebugLog MODULE_NAME, FUNC_NAME, Replace("Submission %1 not found", "%1", sZipFile), vbLogEventTypeError
                 GoTo Continue
@@ -235,23 +238,39 @@ Private Function pvUpload(sDbFile As String, sPassword As String, sUploadsFolder
             Set oArchive = Nothing
         End If
         If LenB(C_Str(rs!PicturePath.Value)) <> 0 Then
-            sPictureFile = Trim$(GetFileName(C_Str(rs!PicturePath.Value)))
+            sPictureFile = StrConv(StrConv(Trim$(GetFileName(C_Str(rs!PicturePath.Value))), vbFromUnicode), vbUnicode)
             If Not FileExists(PathCombine(sPictureFolder, sPictureFile)) Then
                 DebugLog MODULE_NAME, FUNC_NAME, Replace("Picture %1 not found", "%1", sPictureFile), vbLogEventTypeError
-                GoTo Continue
+                sPictureFile = vbNullString
             End If
         Else
             sPictureFile = vbNullString
         End If
-        pvExec "gh", Replace("repo create Planet-Source-Code/%1 --public -y", "%1", sRepoName)
+        sResult = pvExec("gh", Replace("repo create Planet-Source-Code/%1 --public -y", "%1", sRepoName))
         MkDir PathCombine(sTempDir, sRepoName)
         For Each vElem In EnumFiles(sTempDir)
+            ChDir vElem
+            pvExec "git", "init"
+            pvExec "git", "config user.email pscbot@saas.bg"
+            pvExec "git", "config user.name pscbot"
+            pvExec "git", Replace("remote add origin git@github.com:Planet-Source-Code/%1.git", "%1", sRepoName)
+            If InStr(1, sResult, "name already exists", vbTextCompare) > 0 Then
+                sResult = pvExec("git", "pull origin master")
+            End If
             If LenB(sPictureFile) <> 0 Then
                 If FileExists(PathCombine(sPictureFolder, sPictureFile)) Then
                     FileCopy PathCombine(sPictureFolder, sPictureFile), PathCombine(vElem, sPictureFile)
                 Else
                     sPictureFile = vbNullString
                 End If
+            ElseIf Not oArchive Is Nothing Then
+                For lIdx = 0 To oArchive.FileCount - 1
+                    If preg_match("/^[^\\]+\.(gif|jpg|png)$/i", At(oArchive.FileInfo(lIdx), 0)) > 0 Then
+                        sPictureFile = At(oArchive.FileInfo(lIdx), 0)
+                        DebugLog MODULE_NAME, FUNC_NAME, Replace("Will use %1 picture instead", "%1", sPictureFile)
+                        Exit For
+                    End If
+                Next
             End If
             If Not oArchive Is Nothing Then
                 If FileExists(PathCombine(sTemplateDir, ".gitattributes")) Then
@@ -267,37 +286,34 @@ Private Function pvUpload(sDbFile As String, sPassword As String, sUploadsFolder
             sReadmeText = Replace(sReadmeText, "{AuthorName}", Zn(C_Str(rs!AuthorName.Value), "Unknown Author"))
             sReadmeText = Replace(sReadmeText, "{PICTURE_IMAGE}", IIf(LenB(sPictureFile) <> 0, "<img src=""" & sPictureFile & """>", vbNullString))
             sReadmeText = Replace(sReadmeText, "{Description}", pvToMarkdown(pvRTrim(C_Str(rs!Description.Value))))
-            sText = pvToMarkdown(pvRTrim(pvEmptyIf(pvEmptyIf(pvEmptyIf(pvEmptyIf(rs!Inputs.Value, "None"), "none"), "Nothing"), "N/A")))
-            sText = pvAppend(sText, vbCrLf & vbCrLf, pvToMarkdown(pvRTrim(pvEmptyIf(pvEmptyIf(pvEmptyIf(pvEmptyIf(rs!Assumes.Value, "None"), "none"), "Nothing"), "N/A"))))
-            sText = pvAppend(sText, vbCrLf & vbCrLf, pvToMarkdown(pvRTrim(pvEmptyIf(pvEmptyIf(pvEmptyIf(pvEmptyIf(rs!CodeReturns.Value, "None"), "none"), "Nothing"), "N/A"))))
-            sText = pvAppend(sText, vbCrLf & vbCrLf, pvToMarkdown(pvRTrim(pvEmptyIf(pvEmptyIf(pvEmptyIf(pvEmptyIf(rs!SideEffects.Value, "None"), "none"), "Nothing"), "N/A"))))
+            sText = pvToMarkdown(pvRTrim(pvEmptyIf(C_Str(rs!Inputs.Value), STR_EMPTYLIST)))
+            sText = pvAppend(sText, vbCrLf & vbCrLf, pvToMarkdown(pvRTrim(pvEmptyIf(C_Str(rs!Assumes.Value), STR_EMPTYLIST))))
+            sText = pvAppend(sText, vbCrLf & vbCrLf, pvToMarkdown(pvRTrim(pvEmptyIf(C_Str(rs!CodeReturns.Value), STR_EMPTYLIST))))
+            sText = pvAppend(sText, vbCrLf & vbCrLf, pvToMarkdown(pvRTrim(pvEmptyIf(C_Str(rs!SideEffects.Value), STR_EMPTYLIST))))
             sReadmeText = Replace(sReadmeText, "{EXTRA_TITLE}", IIf(LenB(sText) <> 0, "### More Info", vbNullString))
             sReadmeText = Replace(sReadmeText, "{EXTRA_TEXT}", IIf(LenB(sText) <> 0, sText & vbCrLf, vbNullString))
-            sText = pvRTrim(pvEmptyIf(pvEmptyIf(pvEmptyIf(pvEmptyIf(rs!ApiDeclarations.Value, "None"), "none"), "Nothing"), "N/A"))
+            sText = pvRTrim(pvEmptyIf(C_Str(rs!ApiDeclarations.Value), STR_EMPTYLIST))
             sReadmeText = Replace(sReadmeText, "{API_TITLE}", IIf(LenB(sText) <> 0, "### API Declarations", vbNullString))
-            If LenB(sText) <> 0 And (preg_match("Declare \w+ \w+ Lib", sText) > 0 Or preg_match("\#include", sText) > 0) Then
+            If LenB(sText) <> 0 And (preg_match("/Declare \w+ \w+ Lib/i", sText) > 0 Or preg_match("\#include", sText) > 0) Then
                 sText = "```" & vbCrLf & sText & vbCrLf & "```"
             End If
             sReadmeText = Replace(sReadmeText, "{API_TEXT}", IIf(LenB(sText) <> 0, sText & vbCrLf, vbNullString))
-            sText = pvRTrim(pvEmptyIf(C_Str(rs!code.Value), "Upload"))
+            sText = pvRTrim(pvEmptyIf(C_Str(rs!Code.Value), "upload"))
             sReadmeText = Replace(sReadmeText, "{CODE_TITLE}", IIf(LenB(sText) <> 0, "### Source Code", vbNullString))
-            If LenB(sText) <> 0 And preg_match("<\w+[^<]*>", sText) <= 2 And preg_match("<%", sText) = 0 Then
+            If LenB(sText) <> 0 And preg_match("/\r?\n/m", sText) > 1 And (preg_match("<\w+[^<]*>", sText) <= 2 Or preg_match("</\w+[^<]*>", sText) <= 2 Or preg_match("<[%?!]", sText) > 0) Then
                 sText = "```" & vbCrLf & sText & vbCrLf & "```"
             End If
             sReadmeText = Replace(sReadmeText, "{CODE_TEXT}", IIf(LenB(sText) <> 0, sText & vbCrLf, vbNullString))
             sReadmeText = preg_replace("/\r\n(\s*\r\n)+/m", sReadmeText, vbCrLf & vbCrLf)
             WriteTextFile PathCombine(vElem, "README.md"), sReadmeText, "utf-8"
-            ChDir vElem
-            pvExec "git", "init"
-            pvExec "git", "config user.email pscbot@saas.bg"
-            pvExec "git", "config user.name pscbot"
-            pvExec "git", Replace("remote add origin git@github.com:Planet-Source-Code/%1.git", "%1", sRepoName)
             pvExec "git", "add ."
-            pvExec "git", "commit -m ""Initial commit"""
+            sResult = pvExec("git", "commit -m ""Initial commit"" --amend")
+            If InStr(1, sResult, "fatal: ", vbTextCompare) > 0 Or InStr(1, sResult, "error: ", vbTextCompare) > 0 Then
+                sResult = pvExec("git", "commit -m ""Initial commit""")
+            End If
             sResult = pvExec("git", "push origin master")
-            If InStr(1, sResult, "error: ", vbTextCompare) > 0 Then
-                sResult = pvExec("git", "pull origin master --allow-unrelated-histories")
-                sResult = pvExec("git", "push origin master")
+            If InStr(1, sResult, "fatal: ", vbTextCompare) > 0 Or InStr(1, sResult, "error: ", vbTextCompare) > 0 Then
+                sResult = pvExec("git", "push origin master --force")
             End If
             ChDir sTempDir
             pvExec "cmd", Replace("/c rd %1 /s /q", "%1", ArgvQuote(vElem))
@@ -330,10 +346,15 @@ Private Function pvAppend(sText As String, sDelim As String, sAppend As String) 
     pvAppend = sText & IIf(LenB(sText) <> 0 And LenB(sAppend) <> 0, sDelim, vbNullString) & sAppend
 End Function
 
-Private Function pvEmptyIf(Value As Variant, EmptyValue As Variant) As Variant
-    If Value <> EmptyValue Then
-        pvEmptyIf = Value
-    End If
+Private Function pvEmptyIf(Value As String, EmptyValues As String) As String
+    Dim vElem           As Variant
+    
+    For Each vElem In Split(EmptyValues, "|")
+        If LCase$(Value) = LCase$(vElem) Then
+            Exit Function
+        End If
+    Next
+    pvEmptyIf = Value
 End Function
 
 Private Function pvExec(sFile As String, sParams As String) As String
@@ -352,7 +373,7 @@ Private Function pvExec(sFile As String, sParams As String) As String
 End Function
 
 Private Function pvToMarkdown(sText As String) As String
-    pvToMarkdown = preg_replace("/\r?\n/m", sText, vbCrLf & vbCrLf)
+    pvToMarkdown = preg_replace("/^[ \t]+/m", preg_replace("/\r?\n|____+ |----+|====+ /m", sText, vbCrLf & vbCrLf), vbNullString)
 End Function
 
 Private Function pvRTrim(sText As String) As String
