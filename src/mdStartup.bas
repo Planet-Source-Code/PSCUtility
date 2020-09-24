@@ -18,6 +18,8 @@ Private Declare Sub ExitProcess Lib "kernel32" (ByVal uExitCode As Long)
 Private Const STR_VERSION               As String = "1.0"
 Private Const STR_CONNSTR               As String = "Provider=MSDASQL.1;Persist Security Info=False;Data Source=MS Access Database;Initial Catalog=%1"
 Private Const DBL_EPSILON               As Double = 0.000001
+Private Const MAX_REPONAME              As Long = 100
+Private Const STR_EMPTYLIST             As String = "none|none.|none,|non|non.|non,|no|no.|no,|nothing|nothing.|nothing,|n/a|n/a.|n/a,|na|na.|na,|nil|nil.|nil,"
 
 Private m_oOpt                      As Object
 
@@ -146,11 +148,8 @@ End Function
 
 Private Function pvUpload(sDbFile As String, sPassword As String, sUploadsFolder As String, sPictureFolder As String) As Boolean
     Const FUNC_NAME     As String = "pvUpload"
-    Const MAX_REPONAME  As Long = 100
-    Const STR_EMPTYLIST As String = "none|none.|none,|non|non.|non,|no|no.|no,|nothing|nothing.|nothing,|n/a|n/a.|n/a,|na|na.|na,|nil|nil.|nil,"
     Dim cn              As Connection
     Dim rs              As Recordset
-    Dim sSql            As String
     Dim sTemplateDir    As String
     Dim sReadmeTempl    As String
     Dim sTempDir        As String
@@ -169,43 +168,11 @@ Private Function pvUpload(sDbFile As String, sPassword As String, sUploadsFolder
     Set cn = New ADODB.Connection
     cn.CursorLocation = adUseClient
     cn.Open Replace(STR_CONNSTR, "%1", sDbFile), Password:=sPassword
-    pvCreateExtraTables cn
-    sSql = "SELECT      s.ID" & vbCrLf & _
-           "            , s.WorldId" & vbCrLf & _
-           "            , s.AuthorName" & vbCrLf & _
-           "            , s.Title" & vbCrLf & _
-           "            , c.Line AS Code" & vbCrLf & _
-           "            , s.Description" & vbCrLf & _
-           "            , s.Inputs" & vbCrLf & _
-           "            , s.Assumes" & vbCrLf & _
-           "            , s.CodeReturns" & vbCrLf & _
-           "            , s.SideEffects" & vbCrLf & _
-           "            , s.ApiDeclarations" & vbCrLf & _
-           "            , s.PicturePath" & vbCrLf & _
-           "            , s.ZipFilePath" & vbCrLf & _
-           "            , s.UserRatingTotal" & vbCrLf & _
-           "            , s.NumOfUserRatings" & vbCrLf & _
-           "            , sc1.CompatibilityName" & vbCrLf & _
-           "            , cat.CategoryName" & vbCrLf & _
-           "            , dif.Name AS CodeDifficultyName" & vbCrLf
-    sSql = sSql & _
-           "FROM        (((((Submission AS s" & vbCrLf & _
-           "INNER JOIN  Code AS c" & vbCrLf & _
-           "ON          s.ID = c.ID AND s.WorldId = c.WorldId)" & vbCrLf & _
-           "LEFT JOIN   Complete AS d" & vbCrLf & _
-           "ON          s.ID = d.ID AND s.WorldId = d.WorldId)" & vbCrLf & _
-           "LEFT JOIN   SubmissionCompatibility sc1" & vbCrLf & _
-           "ON          s.ID = sc1.ID AND s.WorldId = sc1.WorldId)" & vbCrLf & _
-           "LEFT JOIN   Category cat" & vbCrLf & _
-           "ON          s.CategoryId = cat.CategoryId AND s.WorldId = cat.WorldId)" & vbCrLf & _
-           "LEFT JOIN   DifficultyType dif" & vbCrLf & _
-           "ON          s.CodeDifficultyTypeId = dif.DifficultyTypeId)" & vbCrLf & _
-           "WHERE       c.LineNumber = 1 AND d.ID IS NULL" & vbCrLf & _
-           "ORDER BY    s.AuthorName, s.Title, s.ID, s.WorldID"
-    Set rs = New ADODB.Recordset
-    rs.CursorLocation = adUseClient
-    rs.Open sSql, cn
+    If Not pvFetchSubmissions(cn, rs) Then
+        GoTo QH
+    End If
     If rs.RecordCount = 0 Then
+        DebugLog MODULE_NAME, FUNC_NAME, "No submission is left to upload"
         GoTo QH
     End If
     DebugLog MODULE_NAME, FUNC_NAME, Replace("Found %1 submissions for upload", "%1", rs.RecordCount)
@@ -295,14 +262,23 @@ Private Function pvUpload(sDbFile As String, sPassword As String, sUploadsFolder
             sReadmeText = Replace(sReadmeText, "{AuthorName}", Zn(C_Str(rs!AuthorName.Value), "Unknown Author"))
             sReadmeText = Replace(sReadmeText, "{PICTURE_IMAGE}", IIf(LenB(sPictureFile) <> 0, "<img src=""" & sPictureFile & """>", vbNullString))
             sReadmeText = Replace(sReadmeText, "{Description}", pvToMarkdown(pvRTrim(C_Str(rs!Description.Value))))
-            sText = pvToMarkdown(pvRTrim(pvEmptyIf(C_Str(rs!Inputs.Value), STR_EMPTYLIST)))
-            If C_Str(rs!Assumes.Value) <> C_Str(rs!Inputs.Value) Then
+            sText = vbNullString
+            If C_Str(rs!Inputs.Value) <> C_Str(rs!Description.Value) Then
+                sText = pvAppend(sText, vbCrLf & vbCrLf, pvToMarkdown(pvRTrim(pvEmptyIf(C_Str(rs!Inputs.Value), STR_EMPTYLIST))))
+            End If
+            If C_Str(rs!Assumes.Value) <> C_Str(rs!Description.Value) _
+                    And C_Str(rs!Assumes.Value) <> C_Str(rs!Inputs.Value) Then
                 sText = pvAppend(sText, vbCrLf & vbCrLf, pvToMarkdown(pvRTrim(pvEmptyIf(C_Str(rs!Assumes.Value), STR_EMPTYLIST))))
             End If
-            If C_Str(rs!CodeReturns.Value) <> C_Str(rs!Inputs.Value) And C_Str(rs!CodeReturns.Value) <> C_Str(rs!Assumes.Value) Then
+            If C_Str(rs!CodeReturns.Value) <> C_Str(rs!Description.Value) _
+                    And C_Str(rs!CodeReturns.Value) <> C_Str(rs!Inputs.Value) _
+                    And C_Str(rs!CodeReturns.Value) <> C_Str(rs!Assumes.Value) Then
                 sText = pvAppend(sText, vbCrLf & vbCrLf, pvToMarkdown(pvRTrim(pvEmptyIf(C_Str(rs!CodeReturns.Value), STR_EMPTYLIST))))
             End If
-            If C_Str(rs!SideEffects.Value) <> C_Str(rs!Inputs.Value) And C_Str(rs!SideEffects.Value) <> C_Str(rs!Assumes.Value) And C_Str(rs!SideEffects.Value) <> C_Str(rs!CodeReturns.Value) Then
+            If C_Str(rs!SideEffects.Value) <> C_Str(rs!Description.Value) _
+                    And C_Str(rs!SideEffects.Value) <> C_Str(rs!Inputs.Value) _
+                    And C_Str(rs!SideEffects.Value) <> C_Str(rs!Assumes.Value) _
+                    And C_Str(rs!SideEffects.Value) <> C_Str(rs!CodeReturns.Value) Then
                 sText = pvAppend(sText, vbCrLf & vbCrLf, pvToMarkdown(pvRTrim(pvEmptyIf(C_Str(rs!SideEffects.Value), STR_EMPTYLIST))))
             End If
             sReadmeText = Replace(sReadmeText, "{EXTRA_TITLE}", "### More Info")
@@ -357,6 +333,122 @@ Continue:
     '--- success
     pvUpload = True
 QH:
+    Exit Function
+EH:
+    PrintError FUNC_NAME
+End Function
+
+Private Function pvFetchSubmissions(cn As Connection, rs As Recordset) As Boolean
+    Const FUNC_NAME     As String = "pvFetchSubmissions"
+    Dim rsTables        As Recordset
+    Dim sSql            As String
+    
+    On Error GoTo EH
+    Set rsTables = cn.OpenSchema(adSchemaTables)
+    rsTables.Find "TABLE_NAME='Complete'"
+    If rsTables.EOF Then
+        sSql = "CREATE TABLE Complete(" & vbCrLf & _
+               "           ID              INT" & vbCrLf & _
+               "           , WorldID       INT" & vbCrLf & _
+               "           , RepoName      LONGTEXT" & vbCrLf & _
+               "           , PRIMARY KEY(ID, WorldID)" & vbCrLf & _
+               "           )"
+        cn.Execute sSql
+    End If
+    Set rsTables = cn.OpenSchema(adSchemaTables)
+    rsTables.Find "TABLE_NAME='SubmissionCompatibility'"
+    If rsTables.EOF Then
+        sSql = "SELECT      scm.*" & vbCrLf & _
+               "            , '' AS CompatibilityName" & vbCrLf & _
+               "            , 0 AS CompatibilityOrderIndex" & vbCrLf & _
+               "            , 0 AS SeqNo" & vbCrLf & _
+               "INTO        TempCompatibility" & vbCrLf & _
+               "FROM        SubmissionCompatibilityMemb scm"
+        cn.Execute sSql
+        sSql = "UPDATE      TempCompatibility" & vbCrLf & _
+               "INNER JOIN  Compatibility" & vbCrLf & _
+               "ON          Compatibility.CompatbilityId = TempCompatibility.CompatbilityId" & vbCrLf & _
+               "SET         TempCompatibility.CompatibilityOrderIndex = Compatibility.OrderIndex " & vbCrLf & _
+               "            , TempCompatibility.CompatibilityName = Compatibility.Name"
+        cn.Execute sSql
+        sSql = "SELECT      s1.SubmissionCompatibilityMembId" & vbCrLf & _
+               "            , COUNT(*) AS SeqNo" & vbCrLf & _
+               "INTO        TempSeqNo" & vbCrLf & _
+               "FROM        TempCompatibility s1" & vbCrLf & _
+               "INNER JOIN  TempCompatibility s2" & vbCrLf & _
+               "ON          s2.SubmissionId = s1.SubmissionId" & vbCrLf & _
+               "            AND s2.WorldId = s1.WorldId" & vbCrLf & _
+               "            AND s2.CompatibilityOrderIndex <= s1.CompatibilityOrderIndex" & vbCrLf & _
+               "GROUP BY    s1.SubmissionCompatibilityMembId"
+        cn.Execute sSql
+        sSql = "UPDATE      TempCompatibility" & vbCrLf & _
+               "INNER JOIN  TempSeqNo s" & vbCrLf & _
+               "ON          TempCompatibility.SubmissionCompatibilityMembId = s.SubmissionCompatibilityMembId" & vbCrLf & _
+               "SET         TempCompatibility.SeqNo = s.SeqNo"
+        cn.Execute sSql
+        sSql = "SELECT      s.ID, s.WorldId, sc1.CompatibilityName & IIf(IsNull(sc2.CompatibilityName), '', ', ' & sc2.CompatibilityName) & IIf(IsNull(sc3.CompatibilityName), '', ', ' & sc3.CompatibilityName) " & vbCrLf & _
+               "                & IIf(IsNull(sc4.CompatibilityName), '', ', ' & sc4.CompatibilityName) & IIf(IsNull(sc5.CompatibilityName), '', ', ' & sc5.CompatibilityName)" & vbCrLf & _
+               "                & IIf(IsNull(sc6.CompatibilityName), '', ', ' & sc6.CompatibilityName) & IIf(IsNull(sc7.CompatibilityName), '', ', ' & sc7.CompatibilityName)" & vbCrLf & _
+               "                & IIf(IsNull(sc8.CompatibilityName), '', ', ' & sc8.CompatibilityName) & IIf(IsNull(sc9.CompatibilityName), '', ', ' & sc9.CompatibilityName) AS CompatibilityName" & vbCrLf & _
+               "INTO        SubmissionCompatibility" & vbCrLf & _
+               "FROM        (((((((((Submission s" & vbCrLf & _
+               "LEFT JOIN   (SELECT * FROM TempCompatibility WHERE SeqNo = 1) sc1" & vbCrLf & _
+               "ON          s.ID = sc1.SubmissionId AND s.WorldId = sc1.WorldId)" & vbCrLf & _
+               "LEFT JOIN   (SELECT * FROM TempCompatibility WHERE SeqNo = 2) sc2" & vbCrLf & _
+               "ON          s.ID = sc2.SubmissionId AND s.WorldId = sc2.WorldId)" & vbCrLf & _
+               "LEFT JOIN   (SELECT * FROM TempCompatibility WHERE SeqNo = 3) sc3" & vbCrLf & _
+               "ON          s.ID = sc3.SubmissionId AND s.WorldId = sc3.WorldId)" & vbCrLf & _
+               "LEFT JOIN   (SELECT * FROM TempCompatibility WHERE SeqNo = 4) sc4" & vbCrLf & _
+               "ON          s.ID = sc4.SubmissionId AND s.WorldId = sc4.WorldId)" & vbCrLf & _
+               "LEFT JOIN   (SELECT * FROM TempCompatibility WHERE SeqNo = 5) sc5" & vbCrLf & _
+               "ON          s.ID = sc5.SubmissionId AND s.WorldId = sc5.WorldId)" & vbCrLf & _
+               "LEFT JOIN   (SELECT * FROM TempCompatibility WHERE SeqNo = 6) sc6" & vbCrLf & _
+               "ON          s.ID = sc6.SubmissionId AND s.WorldId = sc6.WorldId)" & vbCrLf & _
+               "LEFT JOIN   (SELECT * FROM TempCompatibility WHERE SeqNo = 7) sc7" & vbCrLf & _
+               "ON          s.ID = sc7.SubmissionId AND s.WorldId = sc7.WorldId)" & vbCrLf & _
+               "LEFT JOIN   (SELECT * FROM TempCompatibility WHERE SeqNo = 8) sc8" & vbCrLf & _
+               "ON          s.ID = sc8.SubmissionId AND s.WorldId = sc8.WorldId)" & vbCrLf & _
+               "LEFT JOIN   (SELECT * FROM TempCompatibility WHERE SeqNo = 9) sc9" & vbCrLf & _
+               "ON          s.ID = sc9.SubmissionId AND s.WorldId = sc9.WorldId)"
+        cn.Execute sSql
+    End If
+    sSql = "SELECT      s.ID" & vbCrLf & _
+           "            , s.WorldId" & vbCrLf & _
+           "            , s.AuthorName" & vbCrLf & _
+           "            , s.Title" & vbCrLf & _
+           "            , c.Line AS Code" & vbCrLf & _
+           "            , s.Description" & vbCrLf & _
+           "            , s.Inputs" & vbCrLf & _
+           "            , s.Assumes" & vbCrLf & _
+           "            , s.CodeReturns" & vbCrLf & _
+           "            , s.SideEffects" & vbCrLf & _
+           "            , s.ApiDeclarations" & vbCrLf & _
+           "            , s.PicturePath" & vbCrLf & _
+           "            , s.ZipFilePath" & vbCrLf & _
+           "            , s.UserRatingTotal" & vbCrLf & _
+           "            , s.NumOfUserRatings" & vbCrLf & _
+           "            , sc1.CompatibilityName" & vbCrLf & _
+           "            , cat.CategoryName" & vbCrLf & _
+           "            , dif.Name AS CodeDifficultyName" & vbCrLf
+    sSql = sSql & _
+           "FROM        (((((Submission AS s" & vbCrLf & _
+           "INNER JOIN  Code AS c" & vbCrLf & _
+           "ON          s.ID = c.ID AND s.WorldId = c.WorldId)" & vbCrLf & _
+           "LEFT JOIN   Complete AS d" & vbCrLf & _
+           "ON          s.ID = d.ID AND s.WorldId = d.WorldId)" & vbCrLf & _
+           "LEFT JOIN   SubmissionCompatibility sc1" & vbCrLf & _
+           "ON          s.ID = sc1.ID AND s.WorldId = sc1.WorldId)" & vbCrLf & _
+           "LEFT JOIN   Category cat" & vbCrLf & _
+           "ON          s.CategoryId = cat.CategoryId AND s.WorldId = cat.WorldId)" & vbCrLf & _
+           "LEFT JOIN   DifficultyType dif" & vbCrLf & _
+           "ON          s.CodeDifficultyTypeId = dif.DifficultyTypeId)" & vbCrLf & _
+           "WHERE       c.LineNumber = 1 AND d.ID IS NULL" & vbCrLf & _
+           "ORDER BY    s.AuthorName, s.Title, s.ID, s.WorldID"
+    Set rs = New ADODB.Recordset
+    rs.CursorLocation = adUseClient
+    rs.Open sSql, cn
+    '--- success
+    pvFetchSubmissions = True
     Exit Function
 EH:
     PrintError FUNC_NAME
@@ -423,77 +515,3 @@ End Function
 Private Function pvLineCount(sText As String) As Long
     pvLineCount = preg_match("/\r?\n/m", sText)
 End Function
-
-Private Sub pvCreateExtraTables(cn As Connection)
-    Dim rs              As Recordset
-    Dim sSql            As String
-        
-    Set rs = cn.OpenSchema(adSchemaTables)
-    rs.Find "TABLE_NAME='Complete'"
-    If rs.EOF Then
-        sSql = "CREATE TABLE Complete(" & vbCrLf & _
-               "           ID              INT" & vbCrLf & _
-               "           , WorldID       INT" & vbCrLf & _
-               "           , RepoName      LONGTEXT" & vbCrLf & _
-               "           , PRIMARY KEY(ID, WorldID)" & vbCrLf & _
-               "           )"
-        cn.Execute sSql
-    End If
-    Set rs = cn.OpenSchema(adSchemaTables)
-    rs.Find "TABLE_NAME='SubmissionCompatibility'"
-    If rs.EOF Then
-        sSql = "SELECT      scm.*" & vbCrLf & _
-               "            , '' AS CompatibilityName" & vbCrLf & _
-               "            , 0 AS CompatibilityOrderIndex" & vbCrLf & _
-               "            , 0 AS SeqNo" & vbCrLf & _
-               "INTO        TempCompatibility" & vbCrLf & _
-               "FROM        SubmissionCompatibilityMemb scm"
-        cn.Execute sSql
-        sSql = "UPDATE      TempCompatibility" & vbCrLf & _
-               "INNER JOIN  Compatibility" & vbCrLf & _
-               "ON          Compatibility.CompatbilityId = TempCompatibility.CompatbilityId" & vbCrLf & _
-               "SET         TempCompatibility.CompatibilityOrderIndex = Compatibility.OrderIndex " & vbCrLf & _
-               "            , TempCompatibility.CompatibilityName = Compatibility.Name"
-        cn.Execute sSql
-        sSql = "SELECT      s1.SubmissionCompatibilityMembId" & vbCrLf & _
-               "            , COUNT(*) AS SeqNo" & vbCrLf & _
-               "INTO        TempSeqNo" & vbCrLf & _
-               "FROM        TempCompatibility s1" & vbCrLf & _
-               "INNER JOIN  TempCompatibility s2" & vbCrLf & _
-               "ON          s2.SubmissionId = s1.SubmissionId" & vbCrLf & _
-               "            AND s2.WorldId = s1.WorldId" & vbCrLf & _
-               "            AND s2.CompatibilityOrderIndex <= s1.CompatibilityOrderIndex" & vbCrLf & _
-               "GROUP BY    s1.SubmissionCompatibilityMembId"
-        cn.Execute sSql
-        sSql = "UPDATE      TempCompatibility" & vbCrLf & _
-               "INNER JOIN  TempSeqNo s" & vbCrLf & _
-               "ON          TempCompatibility.SubmissionCompatibilityMembId = s.SubmissionCompatibilityMembId" & vbCrLf & _
-               "SET         TempCompatibility.SeqNo = s.SeqNo"
-        cn.Execute sSql
-        sSql = "SELECT      s.ID, s.WorldId, sc1.CompatibilityName & IIf(IsNull(sc2.CompatibilityName), '', ', ' & sc2.CompatibilityName) & IIf(IsNull(sc3.CompatibilityName), '', ', ' & sc3.CompatibilityName) " & vbCrLf & _
-               "                & IIf(IsNull(sc4.CompatibilityName), '', ', ' & sc4.CompatibilityName) & IIf(IsNull(sc5.CompatibilityName), '', ', ' & sc5.CompatibilityName)" & vbCrLf & _
-               "                & IIf(IsNull(sc6.CompatibilityName), '', ', ' & sc6.CompatibilityName) & IIf(IsNull(sc7.CompatibilityName), '', ', ' & sc7.CompatibilityName)" & vbCrLf & _
-               "                & IIf(IsNull(sc8.CompatibilityName), '', ', ' & sc8.CompatibilityName) & IIf(IsNull(sc9.CompatibilityName), '', ', ' & sc9.CompatibilityName) AS CompatibilityName" & vbCrLf & _
-               "INTO        SubmissionCompatibility" & vbCrLf & _
-               "FROM        (((((((((Submission s" & vbCrLf & _
-               "LEFT JOIN   (SELECT * FROM TempCompatibility WHERE SeqNo = 1) sc1" & vbCrLf & _
-               "ON          s.ID = sc1.SubmissionId AND s.WorldId = sc1.WorldId)" & vbCrLf & _
-               "LEFT JOIN   (SELECT * FROM TempCompatibility WHERE SeqNo = 2) sc2" & vbCrLf & _
-               "ON          s.ID = sc2.SubmissionId AND s.WorldId = sc2.WorldId)" & vbCrLf & _
-               "LEFT JOIN   (SELECT * FROM TempCompatibility WHERE SeqNo = 3) sc3" & vbCrLf & _
-               "ON          s.ID = sc3.SubmissionId AND s.WorldId = sc3.WorldId)" & vbCrLf & _
-               "LEFT JOIN   (SELECT * FROM TempCompatibility WHERE SeqNo = 4) sc4" & vbCrLf & _
-               "ON          s.ID = sc4.SubmissionId AND s.WorldId = sc4.WorldId)" & vbCrLf & _
-               "LEFT JOIN   (SELECT * FROM TempCompatibility WHERE SeqNo = 5) sc5" & vbCrLf & _
-               "ON          s.ID = sc5.SubmissionId AND s.WorldId = sc5.WorldId)" & vbCrLf & _
-               "LEFT JOIN   (SELECT * FROM TempCompatibility WHERE SeqNo = 6) sc6" & vbCrLf & _
-               "ON          s.ID = sc6.SubmissionId AND s.WorldId = sc6.WorldId)" & vbCrLf & _
-               "LEFT JOIN   (SELECT * FROM TempCompatibility WHERE SeqNo = 7) sc7" & vbCrLf & _
-               "ON          s.ID = sc7.SubmissionId AND s.WorldId = sc7.WorldId)" & vbCrLf & _
-               "LEFT JOIN   (SELECT * FROM TempCompatibility WHERE SeqNo = 8) sc8" & vbCrLf & _
-               "ON          s.ID = sc8.SubmissionId AND s.WorldId = sc8.WorldId)" & vbCrLf & _
-               "LEFT JOIN   (SELECT * FROM TempCompatibility WHERE SeqNo = 9) sc9" & vbCrLf & _
-               "ON          s.ID = sc9.SubmissionId AND s.WorldId = sc9.WorldId)"
-        cn.Execute sSql
-    End If
-End Sub
