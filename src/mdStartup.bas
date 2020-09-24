@@ -19,7 +19,9 @@ Private Const STR_VERSION               As String = "1.0"
 Private Const STR_CONNSTR               As String = "Provider=MSDASQL.1;Persist Security Info=False;Data Source=MS Access Database;Initial Catalog=%1"
 Private Const DBL_EPSILON               As Double = 0.000001
 Private Const MAX_REPONAME              As Long = 100
-Private Const STR_EMPTYLIST             As String = "none|none.|none,|non|non.|non,|no|no.|no,|nothing|nothing.|nothing,|n/a|n/a.|n/a,|na|na.|na,|nil|nil.|nil,"
+Private Const STR_EMPTYLIST             As String = "none|none.|none,|non|non.|non,|no|no.|no,|nothing|nothing.|nothing,|n/a|n/a.|n/a,|na|na.|na,|nil|nil.|nil,|-|.|,"
+Private Const IDX_FILENAME              As Long = 0
+Private Const IDX_LASTMODIFIED          As Long = 6
 
 Private m_oOpt                      As Object
 
@@ -112,7 +114,7 @@ Private Function pvListArchives(sPath As String) As Boolean
         Set oArchive = New cZipArchive
         If oArchive.OpenArchive(vElem) Then
             For lIdx = 0 To oArchive.FileCount - 1
-                sName = At(oArchive.FileInfo(lIdx), 0)
+                sName = At(oArchive.FileInfo(lIdx), IDX_FILENAME)
                 If Left$(sName, Len(STR_PSC_README)) <> STR_PSC_README And Right$(sName, 1) <> "\" Then
                     ConsolePrint GetFileName(vElem) & "#" & sName & vbCrLf
                     sExt = GetFileExt(sName)
@@ -163,6 +165,8 @@ Private Function pvUpload(sDbFile As String, sPassword As String, sUploadsFolder
     Dim sText           As String
     Dim sResult         As String
     Dim lIdx            As Long
+    Dim dReadmeDate     As Date
+    Dim dSubmitDate     As Date
     
     On Error GoTo EH
     Set cn = New ADODB.Connection
@@ -222,6 +226,7 @@ Private Function pvUpload(sDbFile As String, sPassword As String, sUploadsFolder
         Else
             sPictureFile = vbNullString
         End If
+        dSubmitDate = 0
         sResult = pvExec("gh", Replace("repo create Planet-Source-Code/%1 --public -y", "%1", sRepoName))
         MkDir PathCombine(sTempDir, sRepoName)
         For Each vElem In EnumFiles(sTempDir)
@@ -239,14 +244,31 @@ Private Function pvUpload(sDbFile As String, sPassword As String, sUploadsFolder
                 Else
                     sPictureFile = vbNullString
                 End If
-            ElseIf Not oArchive Is Nothing Then
+            End If
+            If LenB(sPictureFile) = 0 And Not oArchive Is Nothing Then
                 For lIdx = 0 To oArchive.FileCount - 1
-                    If preg_match("/^[^\\]+\.(gif|jpg|png)$/i", At(oArchive.FileInfo(lIdx), 0)) > 0 Then
-                        sPictureFile = At(oArchive.FileInfo(lIdx), 0)
+                    If preg_match("/^[^\\]+\.(gif|jpg|png)$/i", At(oArchive.FileInfo(lIdx), IDX_FILENAME)) > 0 Then
+                        sPictureFile = At(oArchive.FileInfo(lIdx), IDX_FILENAME)
                         DebugLog MODULE_NAME, FUNC_NAME, Replace("Will use %1 picture instead", "%1", sPictureFile)
                         Exit For
                     End If
                 Next
+            End If
+            If Not oArchive Is Nothing Then
+                dReadmeDate = 0
+                For lIdx = 0 To oArchive.FileCount - 1
+                    If preg_match("/^@PSC_ReadMe_/i", At(oArchive.FileInfo(lIdx), IDX_FILENAME)) > 0 Then
+                        dReadmeDate = oArchive.FileInfo(lIdx)(IDX_LASTMODIFIED)
+                    End If
+                Next
+                For lIdx = 0 To oArchive.FileCount - 1
+                    If dSubmitDate < oArchive.FileInfo(lIdx)(IDX_LASTMODIFIED) And (oArchive.FileInfo(lIdx)(IDX_LASTMODIFIED) < dReadmeDate Or dReadmeDate = 0) Then
+                        dSubmitDate = oArchive.FileInfo(lIdx)(IDX_LASTMODIFIED)
+                    End If
+                Next
+                If dSubmitDate = 0 Then
+                    dSubmitDate = dReadmeDate
+                End If
             End If
             If Not oArchive Is Nothing Then
                 oArchive.Extract vElem
@@ -258,8 +280,7 @@ Private Function pvUpload(sDbFile As String, sPassword As String, sUploadsFolder
                 End If
             End If
             sReadmeText = sReadmeTempl
-            sReadmeText = Replace(sReadmeText, "{Title}", rs!Title.Value)
-            sReadmeText = Replace(sReadmeText, "{AuthorName}", Zn(C_Str(rs!AuthorName.Value), "Unknown Author"))
+            sReadmeText = Replace(sReadmeText, "{Title}", pvEscapeMarkdown(C_Str(rs!Title.Value)))
             sReadmeText = Replace(sReadmeText, "{PICTURE_IMAGE}", IIf(LenB(sPictureFile) <> 0, "<img src=""" & sPictureFile & """>", vbNullString))
             sReadmeText = Replace(sReadmeText, "{Description}", pvToMarkdown(pvRTrim(C_Str(rs!Description.Value))))
             sText = vbNullString
@@ -283,8 +304,10 @@ Private Function pvUpload(sDbFile As String, sPassword As String, sUploadsFolder
             End If
             sReadmeText = Replace(sReadmeText, "{EXTRA_TITLE}", "### More Info")
             sReadmeText = Replace(sReadmeText, "{EXTRA_TEXT}", IIf(LenB(sText) <> 0, sText & vbCrLf, vbNullString))
-            sReadmeText = Replace(sReadmeText, "{CategoryName}", C_Str(rs!CategoryName.Value))
-            sReadmeText = Replace(sReadmeText, "{CodeDifficultyName}", C_Str(rs!CodeDifficultyName.Value))
+            sReadmeText = Replace(sReadmeText, "{CategoryName}", pvEscapeMarkdown(C_Str(rs!CategoryName.Value)))
+            sReadmeText = Replace(sReadmeText, "{SUBMIT_DATE}", IIf(dSubmitDate <> 0, Format$(dSubmitDate, FORMAT_DATETIME_ISO), vbNullString))
+            sReadmeText = Replace(sReadmeText, "{AuthorName}", pvEscapeMarkdown(C_Str(rs!AuthorName.Value)))
+            sReadmeText = Replace(sReadmeText, "{CodeDifficultyName}", pvEscapeMarkdown(C_Str(rs!CodeDifficultyName.Value)))
             If Abs(rs!NumOfUserRatings.Value) > DBL_EPSILON Then
                 sReadmeText = Replace(sReadmeText, "{USER_RATING}", Format$(rs!UserRatingTotal.Value / rs!NumOfUserRatings.Value, "0.0"))
             Else
@@ -292,16 +315,17 @@ Private Function pvUpload(sDbFile As String, sPassword As String, sUploadsFolder
             End If
             sReadmeText = Replace(sReadmeText, "{UserRatingTotal}", C_Str(rs!UserRatingTotal.Value))
             sReadmeText = Replace(sReadmeText, "{NumOfUserRatings}", C_Str(rs!NumOfUserRatings.Value))
-            sReadmeText = Replace(sReadmeText, "{CompatibilityName}", C_Str(rs!CompatibilityName.Value))
+            sReadmeText = Replace(sReadmeText, "{CompatibilityName}", pvEscapeMarkdown(C_Str(rs!CompatibilityName.Value)))
+            sReadmeText = Replace(sReadmeText, "{ARCHIVE_FILE}", pvEscapeMarkdown(Trim$(GetFileName(C_Str(rs!ZipFilePath.Value)))))
             sText = pvRTrim(pvEmptyIf(C_Str(rs!ApiDeclarations.Value), STR_EMPTYLIST))
             sReadmeText = Replace(sReadmeText, "{API_TITLE}", IIf(LenB(sText) <> 0, "### API Declarations", vbNullString))
-            If (pvLineCount(sText) > 1 Or pvIsCode(sText)) And Not pvIsHtml(sText) Then
+            If (pvNewlineCount(sText) > 0 Or pvIsCode(sText)) And Not pvIsHtml(sText) Then
                 sText = "```" & vbCrLf & sText & vbCrLf & "```"
             End If
             sReadmeText = Replace(sReadmeText, "{API_TEXT}", IIf(LenB(sText) <> 0, sText & vbCrLf, vbNullString))
             sText = pvRTrim(pvEmptyIf(C_Str(rs!Code.Value), "upload"))
             sReadmeText = Replace(sReadmeText, "{CODE_TITLE}", IIf(LenB(sText) <> 0, "### Source Code", vbNullString))
-            If (pvLineCount(sText) > 1 Or pvIsCode(sText)) And Not pvIsHtml(sText) Then
+            If (pvNewlineCount(sText) > 0 Or pvIsCode(sText)) And Not pvIsHtml(sText) Then
                 sText = "```" & vbCrLf & sText & vbCrLf & "```"
             End If
             sReadmeText = Replace(sReadmeText, "{CODE_TEXT}", IIf(LenB(sText) <> 0, sText & vbCrLf, vbNullString))
@@ -466,7 +490,7 @@ Private Function pvEmptyIf(Value As String, EmptyValues As String) As String
     Dim vElem           As Variant
     
     For Each vElem In Split(EmptyValues, "|")
-        If LCase$(Value) = LCase$(vElem) Then
+        If Trim$(LCase$(Value)) = LCase$(vElem) Then
             Exit Function
         End If
     Next
@@ -489,7 +513,11 @@ Private Function pvExec(sFile As String, sParams As String) As String
 End Function
 
 Private Function pvToMarkdown(sText As String) As String
-    pvToMarkdown = preg_replace("/^[ \t]+/m", preg_replace("/\r?\n|____+ |----+|====+ /m", sText, vbCrLf & vbCrLf), vbNullString)
+    pvToMarkdown = preg_replace("/^[ \t]+/m", preg_replace("/(\r?\n)+/m", preg_replace("----+|____+|====+", sText, vbCrLf & "----" & vbCrLf), vbCrLf & vbCrLf), vbNullString)
+End Function
+
+Private Function pvEscapeMarkdown(sText As String) As String
+    pvEscapeMarkdown = preg_replace("([\\`*_{}[\]()#+.!-])", sText, "\$1")
 End Function
 
 Private Function pvRTrim(sText As String) As String
@@ -512,6 +540,7 @@ Private Function pvIsCode(sText As String) As Boolean
     End If
 End Function
 
-Private Function pvLineCount(sText As String) As Long
-    pvLineCount = preg_match("/\r?\n/m", sText)
+Private Function pvNewlineCount(sText As String) As Long
+    pvNewlineCount = preg_match("/\r?\n/m", sText)
 End Function
+

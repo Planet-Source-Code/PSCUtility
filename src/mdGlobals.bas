@@ -28,6 +28,7 @@ Private Declare Function VirtualProtect Lib "kernel32" (ByVal lpAddress As Long,
 '--- formats
 Public Const FORMAT_TIME_ONLY           As String = "hh:nn:ss"
 Public Const FORMAT_DATETIME_LOG        As String = "yyyy.MM.dd hh:nn:ss"
+Public Const FORMAT_DATETIME_ISO        As String = "yyyy\-mm\-dd hh:nn:ss"
 Public Const FORMAT_BASE_2              As String = "0.00"
 Public Const FORMAT_BASE_3              As String = "0.000"
 Private Const STR_PREFIX_ERROR          As String = "[Error] "
