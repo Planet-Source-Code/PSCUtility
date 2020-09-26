@@ -23,7 +23,7 @@ AutoIncrementVer=0
 ServerSupportFiles=0
 VersionCompanyName="Unicontsoft"
 VersionFileDescription="PSC Utility"
-VersionLegalCopyright="Copyright © 2020 by wqweto@gmail.com"
+VersionLegalCopyright="Copyright Â© 2020 by wqweto@gmail.com"
 VersionProductName="PSC Utility"
 CondComp="USE_DEBUG_LOG = 1"
 CompilationType=0

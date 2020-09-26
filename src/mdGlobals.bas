@@ -187,6 +187,10 @@ Public Function EnumFiles( _
     Set EnumFiles = RetVal
 End Function
 
+Public Function Nz(vValue As Variant, Optional IfValueIsNull As String = vbNullString) As String
+    Nz = IIf(IsNull(vValue), IfValueIsNull, C_Str(vValue))
+End Function
+
 Public Function Zn(sText As String, Optional IfEmptyString As Variant = Null) As Variant
     Zn = IIf(LenB(sText) = 0, IfEmptyString, sText)
 End Function
@@ -421,3 +425,31 @@ Public Function FileExists(sFile As String) As Boolean
     End If
 End Function
 
+Public Function ConcatCollection(oCol As Collection, Optional Separator As String) As String
+    Dim lSize           As Long
+    Dim vElem           As Variant
+    
+    For Each vElem In oCol
+        lSize = lSize + Len(vElem) + Len(Separator)
+    Next
+    If lSize > 0 Then
+        ConcatCollection = String$(lSize - Len(Separator), 0)
+        lSize = 1
+        For Each vElem In oCol
+            If lSize <= Len(ConcatCollection) Then
+                Mid$(ConcatCollection, lSize, Len(vElem) + Len(Separator)) = vElem & Separator
+            End If
+            lSize = lSize + Len(vElem) + Len(Separator)
+        Next
+    End If
+End Function
+
+Public Function Printf(ByVal sText As String, ParamArray A() As Variant) As String
+    Const LNG_PRIVATE   As Long = &HE1B6 '-- U+E000 to U+F8FF - Private Use Area (PUA)
+    Dim lIdx            As Long
+    
+    For lIdx = UBound(A) To LBound(A) Step -1
+        sText = Replace(sText, "%" & (lIdx - LBound(A) + 1), Replace(A(lIdx), "%", ChrW$(LNG_PRIVATE)))
+    Next
+    Printf = Replace(sText, ChrW$(LNG_PRIVATE), "%")
+End Function
